@@ -1,9 +1,9 @@
 ngx_feature="MagickWand"
-ngx_feature_name=
-ngx_feature_run=no
-ngx_feature_incs="#include <wand/magick-wand.h>"
-ngx_feature_path="/usr/include/ImageMagick"
-ngx_feature_libs=-lMagickWand
+ngx_feature_name=MagickWand
+ngx_feature_run=yes
+ngx_feature_incs="#include <MagickWand/MagickWand.h>"
+ngx_feature_inc_path="`MagickWand-config --cflags`"
+ngx_feature_libs="`MagickWand-config --ldflags`"
 ngx_feature_test="MagickWandGenesis()"
 . auto/feature
 
@@ -11,7 +11,7 @@ if [ $ngx_found = yes ]; then
     ngx_addon_name=ngx_http_circle_gif_module
     HTTP_MODULES="$HTTP_MODULES ngx_http_circle_gif_module"
     NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_circle_gif_module.c"
-    CORE_LIBS="$CORE_LIBS -lMagickWand"
+    CORE_LIBS="$CORE_LIBS -lMagickWand-7"
     CFLAGS="$CFLAGS `MagickWand-config --cflags`"
 else
     cat << END
