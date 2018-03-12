@@ -7,11 +7,12 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <MagickWand/MagickWand.h>
 
-
-#define radius2index(r, cglcf) (r-(cglcf)->min_radius)/(cglcf)->step_radius
-
+#ifdef MAGICK_IMAGE7
+#include <wand/MagickWand.h>
+#else
+#include <wand/MagickWand.h>
+#endif
 
 /*
  * --------------------------------------------------------------------------
@@ -29,7 +30,7 @@ typedef struct {
     ngx_flag_t   enable;
 } loc_conf_t;
 
-static ngx_command_t  commands[] = {
+static ngx_command_t commands[] = {
     { ngx_string("circle_gif"),
       NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
       ngx_http_circle_gif,
@@ -61,14 +62,11 @@ static ngx_command_t  commands[] = {
     ngx_null_command
 };
 
-
 /*
  * --------------------------------------------------------------------------
  * Private implementation
  * --------------------------------------------------------------------------
  */
-enum colors { RED, GREEN, BLUE };
-
 static ngx_int_t preconf(ngx_conf_t *cf);
 static ngx_int_t postconf(ngx_conf_t *cf);
 static ngx_int_t init(loc_conf_t *cf);
@@ -76,7 +74,7 @@ static void* create_loc_conf(ngx_conf_t *cf);
 static char* merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 static ngx_int_t handler(ngx_http_request_t *r);
 
-static ngx_http_module_t  module_ctx = {
+static ngx_http_module_t module_ctx = {
     preconf,                       /* preconfiguration */
     postconf,                      /* postconfiguration */
 
@@ -90,7 +88,7 @@ static ngx_http_module_t  module_ctx = {
     merge_loc_conf                 /* merge location configuration */
 };
 
-ngx_module_t  ngx_http_circle_gif_module = {
+ngx_module_t ngx_http_circle_gif_module = {
     NGX_MODULE_V1,
     &module_ctx,                   /* module context */
     commands,                      /* module directives */
@@ -108,35 +106,34 @@ ngx_module_t  ngx_http_circle_gif_module = {
 static char *
 ngx_http_circle_gif(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
-    ngx_http_core_loc_conf_t  *clcf;
-    loc_conf_t *cglcf = conf;
-
-    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+    ngx_http_core_loc_conf_t *clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
     clcf->handler = handler;
 
+    loc_conf_t *cglcf = conf;
     cglcf->enable = 1;
 
     return NGX_CONF_OK;
 }
-
 
 /*
  * --------------------------------------------------------------------------
  * Private implementation
  * --------------------------------------------------------------------------
  */
-static void* template(int req_radius, size_t* image_length_ptr, 
-    MagickWand *wand, PixelWand *bg_wand, PixelWand *fg_wand, DrawingWand *dwand);
+enum colors { RED, GREEN, BLUE };
+
+static ngx_uint_t radius2index(int req_radius, const loc_conf_t *cglcf);
+static unsigned char *template(int req_radius, size_t* image_length_ptr,  MagickWand *wand, PixelWand *bg_wand, PixelWand *fg_wand, DrawingWand *dwand);
 static void colorize(unsigned char *image, unsigned char *bg, unsigned char *fg);
 
-static ngx_int_t 
+static ngx_int_t
 preconf(ngx_conf_t *cf)
 {
     MagickWandGenesis();
     return 0;
 }
 
-static ngx_int_t 
+static ngx_int_t
 postconf(ngx_conf_t *cf)
 {
     MagickWandTerminus();
@@ -146,37 +143,34 @@ postconf(ngx_conf_t *cf)
 static ngx_int_t
 init(loc_conf_t *cglcf)
 {
-    u_int i;
-    MagickWand *wand;
-    PixelWand *bg_wand, *fg_wand;
-    DrawingWand *dwand;
-
-    wand = NewMagickWand();
-    bg_wand = NewPixelWand();
-    fg_wand = NewPixelWand();
-    dwand = NewDrawingWand();
     if ((cglcf->circle_templates = malloc((1+radius2index(cglcf->max_radius, cglcf))*sizeof(unsigned char*))) == NULL ||
         (cglcf->circle_sizes = malloc((1+radius2index(cglcf->max_radius, cglcf))*sizeof(size_t))) == NULL) {
         perror("malloc()");
         return NGX_ERROR;
     }
-    for (i=0;i<=radius2index(cglcf->max_radius, cglcf);i++) {
-        cglcf->circle_templates[i] = template(cglcf->min_radius+i*cglcf->step_radius, &cglcf->circle_sizes[i], 
-            wand, bg_wand, fg_wand, dwand);
+
+    MagickWand *wand = NewMagickWand();
+    PixelWand *bg_wand = NewPixelWand();
+    PixelWand *fg_wand = NewPixelWand();
+    DrawingWand *dwand = NewDrawingWand();
+
+    u_int i;
+    for (i=0; i<=radius2index(cglcf->max_radius, cglcf); ++i) {
+        cglcf->circle_templates[i] =
+            template(cglcf->min_radius + i*cglcf->step_radius, &cglcf->circle_sizes[i], wand, bg_wand, fg_wand, dwand);
     }
-    DestroyMagickWand( wand );
+
+    DestroyDrawingWand( dwand );
     DestroyPixelWand( fg_wand );
     DestroyPixelWand( bg_wand );
-    DestroyDrawingWand( dwand );
+    DestroyMagickWand( wand );
     return i;
 }
 
 static void *
 create_loc_conf(ngx_conf_t *cf)
 {
-    loc_conf_t  *conf;
-
-    conf = ngx_pcalloc(cf->pool, sizeof(loc_conf_t));
+    loc_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(loc_conf_t));
     if (conf == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -193,17 +187,17 @@ merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     loc_conf_t *prev = parent;
     loc_conf_t *conf = child;
 
-    ngx_conf_merge_uint_value(conf->min_radius, prev->min_radius, 10);
-    ngx_conf_merge_uint_value(conf->max_radius, prev->max_radius, 20);
+    ngx_conf_merge_uint_value(conf->min_radius, prev->min_radius, 20);
+    ngx_conf_merge_uint_value(conf->max_radius, prev->max_radius, 80);
     ngx_conf_merge_uint_value(conf->step_radius, prev->step_radius, 2);
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
 
     if (conf->min_radius < 1) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "min_radius must be equal or more than 1"); 
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "min_radius must be equal or more than 1");
         return NGX_CONF_ERROR;
     }
     if (conf->max_radius < conf->min_radius) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "max_radius must be equal or more than min_radius"); 
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "max_radius must be equal or more than min_radius");
         return NGX_CONF_ERROR;
     }
 
@@ -216,27 +210,14 @@ merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 static ngx_int_t
 handler(ngx_http_request_t *r)
 {
-    ngx_int_t     rc;
-    ngx_buf_t    *b;
-    ngx_chain_t   out;
-    unsigned char *image;
     // all right, let's figure out what they're asking for
-    u_int bg_color, fg_color, req_radius = 0;
-    size_t i;
-    ngx_int_t power;
-    char *digit;
-    unsigned char bg[3]; 
-    unsigned char fg[3];
-
-    loc_conf_t  *cglcf;
-    cglcf = ngx_http_get_module_loc_conf(r, ngx_http_circle_gif_module);
+    loc_conf_t *cglcf = ngx_http_get_module_loc_conf(r, ngx_http_circle_gif_module);
 
     if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
         return NGX_HTTP_NOT_ALLOWED;
     }
 
-    rc = ngx_http_discard_request_body(r);
-
+    ngx_int_t rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK && rc != NGX_AGAIN) {
         return rc;
     }
@@ -245,28 +226,40 @@ handler(ngx_http_request_t *r)
         return NGX_HTTP_NOT_MODIFIED;
     }
 
-    digit = (char *)r->uri.data + r->uri.len - 1;
-
+    /*
+     * uri: circles/BGxxxx/FGxxxx/R.gif
+     * where:
+     *  BG - 6 hex RGB digits
+     *  FG - 6 hex RGB digits
+     *  R  - radius: range 10 - 300
+     */
+    char *digit = (char *)r->uri.data + r->uri.len - 1;
     if (!(*digit-- == 'f' && *digit-- == 'i' && *digit-- == 'g' && *digit-- == '.')) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Invalid extension with %s", digit);
         return NGX_HTTP_NOT_FOUND;
     }
-    for (i=0, power=1; *digit >= '0' && *digit <= '9' && i < (r->uri.len - 7 - 7 - 4); i++, power *= 10) {
+    u_int req_radius = 0;
+    size_t i;
+    ngx_int_t power;
+    for (i=0, power=1; '0' <= *digit && *digit <= '9' && i < (r->uri.len - 7 - 7 - 4); i++, power *= 10) {
         req_radius += (*digit-- - '0')*power;
     }
-    fg_color   = strtol(digit -= 6, NULL, 16); // "XXXXXX"
-    bg_color   = strtol(digit -= 7, NULL, 16); // "XXXXXX/"
+    u_int fg_color = strtol(digit -= 6, NULL, 16); // "XXXXXX"
+    u_int bg_color = strtol(digit -= 7, NULL, 16); // "XXXXXX/"
 
+    unsigned char bg[3];
     bg[RED] = bg_color >> 16;
     bg[GREEN] = bg_color >> 8;
     bg[BLUE] = bg_color;
 
+    unsigned char fg[3];
     fg[RED] = fg_color >> 16;
     fg[GREEN] = fg_color >> 8;
     fg[BLUE] = fg_color;
 
-    r->headers_out.content_type.len = sizeof("image/gif") - 1;
-    r->headers_out.content_type.data = (u_char *) "image/gif";
+    static const char mime_type[] = "image/gif";
+    r->headers_out.content_type.len = sizeof(mime_type) - 1;
+    r->headers_out.content_type.data = (u_char *) mime_type;
 
     if (req_radius < cglcf->min_radius || req_radius > cglcf->max_radius) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Invalid radius %ui", req_radius);
@@ -286,48 +279,48 @@ handler(ngx_http_request_t *r)
         }
     }
 
-    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+    rc = ngx_http_send_header(r);
+    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+        return rc;
+    }
+
+    unsigned char *image = ngx_palloc(r->pool, cglcf->circle_sizes[radius_index]);
+    if (image == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Failed to allocate memory for circle image.");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_memcpy(image, cglcf->circle_templates[radius_index], cglcf->circle_sizes[radius_index]);
+    colorize(image, bg, fg);
+
+    ngx_buf_t *b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
     if (b == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Failed to allocate response buffer.");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    out.buf = b;
-    out.next = NULL;
-
-    image = ngx_palloc(r->pool, cglcf->circle_sizes[radius_index]);
-    if (image == NULL) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Failed to allocate memory for circle image.");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_memcpy(image, cglcf->circle_templates[radius_index], cglcf->circle_sizes[radius_index]);
-    colorize(image, bg, fg);
-
     b->pos = image;
     b->last = image + cglcf->circle_sizes[radius_index];
-
     b->memory = 1;
     b->last_buf = 1;
 
-    rc = ngx_http_send_header(r);
-
-    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
-        return rc;
-    }
-
+    ngx_chain_t out = { b, NULL };
     return ngx_http_output_filter(r, &out);
 }
-
 
 /*
  * --------------------------------------------------------------------------
  * Private helpers
  * --------------------------------------------------------------------------
  */
+static ngx_uint_t
+radius2index(int req_radius, const loc_conf_t *cglcf)
+{
+    return (req_radius - cglcf->min_radius) / cglcf->step_radius;
+}
+
 // build a B&W circle GIF in memory and return a pointer to it.
-static void *
-template(int req_radius, size_t* image_length_ptr, 
-    MagickWand *wand, PixelWand *bg_wand, PixelWand *fg_wand, DrawingWand *dwand)
+static unsigned char *
+template(int req_radius, size_t* image_length_ptr, MagickWand *wand, PixelWand *bg_wand, PixelWand *fg_wand, DrawingWand *dwand)
 {
     float radius = req_radius - 0.5;
 
@@ -348,7 +341,6 @@ template(int req_radius, size_t* image_length_ptr,
 static void
 colorize(unsigned char *image, unsigned char *bg, unsigned char *fg)
 {
-    unsigned char whiteness, blackness;
     // A note about GIFs: the size of the color table is stored in
     // the least significant 3 bits of the 11th byte. The color table itself
     // begins on the 14th byte; it has, successively, a red byte,
@@ -357,14 +349,16 @@ colorize(unsigned char *image, unsigned char *bg, unsigned char *fg)
     // color, and the blackness with the background color.
     // See also: http://www.martinreddy.net/gfx/2d/GIF89a.txt
     unsigned char *color_table_ptr = &image[13];
-    unsigned char *end_color_table_ptr = color_table_ptr+3*(1 << ((image[10] & 0x7) + 1));
+    unsigned char *end_color_table_ptr = color_table_ptr + 3*(1 << ((image[10] & 0x7) + 1));
+
     // yikes, pointer arithmetic! Not really necessary, but kinda fun
     while (color_table_ptr < end_color_table_ptr) {
-        whiteness = *color_table_ptr; // actually the red byte; our B&W template has equal parts r, g, and b
-        blackness = ~whiteness;
+        unsigned char whiteness = *color_table_ptr; // actually the red byte; our B&W template has equal parts r, g, and b
+        unsigned char blackness = ~whiteness;
+
         // now assign new values to the red, green, and blue bytes
-        *color_table_ptr++ = (whiteness*fg[RED]  +blackness*bg[RED])  /0xff;
-        *color_table_ptr++ = (whiteness*fg[GREEN]+blackness*bg[GREEN])/0xff;
-        *color_table_ptr++ = (whiteness*fg[BLUE] +blackness*bg[BLUE]) /0xff;
+        *color_table_ptr++ = (whiteness*fg[RED]   + blackness*bg[RED])  /0xff;
+        *color_table_ptr++ = (whiteness*fg[GREEN] + blackness*bg[GREEN])/0xff;
+        *color_table_ptr++ = (whiteness*fg[BLUE]  + blackness*bg[BLUE]) /0xff;
     }
 }

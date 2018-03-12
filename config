@@ -1,7 +1,13 @@
 ngx_feature="MagickWand"
 ngx_feature_name=MagickWand
 ngx_feature_run=yes
-ngx_feature_incs="#include <MagickWand/MagickWand.h>"
+
+if [ `MagickWand-config --version | cut -b 1` = 7 ]; then
+    ngx_feature_incs="#include <MagickWand/MagickWand.h>"
+else
+    ngx_feature_incs="#include <wand/MagickWand.h>"
+fi
+
 ngx_feature_inc_path="`MagickWand-config --cflags`"
 ngx_feature_libs="`MagickWand-config --ldflags`"
 ngx_feature_test="MagickWandGenesis()"
